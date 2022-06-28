@@ -2,9 +2,11 @@
 
 """
 import argparse
+import multiprocessing
 import os
 from dataclasses import dataclass, field
 from enum import Enum
+from functools import partial
 from itertools import repeat
 from pathlib import Path
 import asyncio
@@ -150,19 +152,20 @@ def get_raw_pillow(raw: SinarIA, h, w):
     return img
 
 
-def apply_local_black_ref(nd_img: np.array, black_path: Path, noise_quantile=99):
+def apply_local_black_ref(nd_img: np.array, black_path: Path):
     b0, b1 = read_black_ref(black_path, nd_img)
     nd_fp = nd_img - b1
     hot_pixels = b0 - b1
     nd_fp_stack = get_colors(nd_fp)
     hot_pixel_stack = get_colors(hot_pixels)
-    pixel_mask = np.greater(hot_pixel_stack, np.percentile(hot_pixel_stack, 60, axis=(0, 1)))
+    pixel_mask = np.greater(hot_pixel_stack, 0)
     # Because scipy does not have way to run median filter on specific axis (or, I don't know how to at least)
     for i in range(4):
         color = nd_fp_stack[::, ::, i]
         mask = pixel_mask[::, ::, i]
-        color[mask] = medfilt2d(color)[mask]
-
+        hot = hot_pixel_stack[::, ::, i]
+        color[mask] = medfilt2d((color-hot))[mask]
+        nd_fp_stack[::, ::, i] = color
     return unstack_colors(nd_fp_stack)
 
 
@@ -261,14 +264,6 @@ def process_list_of_flats_to_flat(flat_files, h=5344, w=4008):
 def apply_flat(nd_img, iso, lens):
     try:
         flat = np.load(str(FLAT_DIR / FILENAME.format(iso=iso, lens=lens)))
-        # green1 = flat[0::2, 0::2]  # / flat[0::2, 0::2].mean()
-        # blue = flat[0::2, 1::2]  # / flat[0::2, 1::2].mean()
-        # red = flat[1::2, 0::2]  # / flat[1::2, 0::2].mean()
-        # green2 = flat[1::2, 1::2]  # / flat[1::2, 1::2].mean()
-        # nd_img[0::2, 0::2] /= green1
-        # nd_img[0::2, 1::2] /= blue
-        # nd_img[1::2, 0::2] /= red
-        # nd_img[1::2, 1::2] /= green2
         return nd_img / flat
     except FileNotFoundError:
         print(f'No flat file exists iso{iso}, {lens}mm !')
@@ -281,15 +276,15 @@ CCM1 = [[690277635, MULT], [81520691, MULT], [-52482637, MULT],
         [-180923460, MULT], [390943643, MULT], [1601514930, MULT]]
 
 
-async def create_ia_dng(img: SinarIA, output_dir: Path, bpp=16, h=5344, w=4008, flat_disable=False):
+def create_ia_dng(img: SinarIA, output_dir: Path, bpp=16, h=5344, w=4008, flat_disable=False):
     corrected_flat = process_raw(img, h, w, flat_disable)
     nd_int = img_as_uint(corrected_flat)
 
-    filename, r = await write_dng(img, nd_int, output_dir, h, w, bpp)
+    filename, r = write_dng(img, nd_int, output_dir, h, w, bpp)
     return filename, r
 
 
-async def write_dng(img, nd_int, output_dir, h, w, bpp):
+def write_dng(img, nd_int, output_dir, h, w, bpp):
     db_model = img.serial.split('-')[0]
     t = DNGTags()
     t.set(Tag.ImageWidth, w)
@@ -345,13 +340,18 @@ async def main(parsed):
             files.append(img_path)
     print(f'Processing {len(files)} images!')
     flat_disable = parsed.flat_disable
+    threads = []
     for f in files:
-        await convert_ia_file_to_dng(f, flat_disable, output_path)
+        t = partial(convert_ia_file_to_dng, f, flat_disable, output_path)
+        threads.append(asyncio.to_thread(t))
+    thread_count = multiprocessing.cpu_count()
+    for t_group in range(0, len(threads), thread_count):
+        await asyncio.gather(*threads[t_group:t_group+thread_count])
 
 
-async def convert_ia_file_to_dng(f, flat_disable, output_path):
+def convert_ia_file_to_dng(f, flat_disable, output_path):
     ia_img = read_sinar(f)
-    f_name, _ = await create_ia_dng(ia_img, output_path, flat_disable=flat_disable)
+    f_name, _ = create_ia_dng(ia_img, output_path, flat_disable=flat_disable)
     print(f'Processed: {f.absolute()} to {f_name.absolute()}')
 
 
@@ -363,12 +363,4 @@ if __name__ == '__main__':
     p.add_argument('--build-flat', default=False, help='Use this directory of files to build a flat file.')
     p.add_argument('images', nargs='*', help='List of images or directory of images to process.')
     args = p.parse_args()
-
-    # if args.multi:
-    #     p = multiprocessing.Pool(4)
-    #     ia_imgs = p.map(read_sinar, files)
-    #     ia_imgs = [i for i in ia_imgs if i.focal_length == 80.0]
-    #     output_path_cycle = repeat(output_path)
-    #     f_names = p.starmap(create_ia_dng, list(zip(ia_imgs, output_path_cycle)))
-    # else:
     asyncio.run(main(args))
