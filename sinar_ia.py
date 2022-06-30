@@ -2,6 +2,7 @@
 
 """
 import argparse
+import json
 import multiprocessing
 import os
 from dataclasses import dataclass, field
@@ -185,7 +186,7 @@ def process_raw(raw: SinarIA, h=5344, w=4008, flat_disable=False):
     else:
         # TODO figure out better way to ident files, or build lensless flat?
         iso, focal = raw.iso, raw.focal_length
-        nd_img_flat = apply_flat(nd_img_b, 50, 80.0)
+        nd_img_flat = apply_flat(nd_img_b, 50, focal)
     return nd_img_flat
 
 
@@ -233,8 +234,7 @@ def create_master_flat(flats, h=5344, w=4008):
             continue
         nd_img = img_as_float(get_raw_pillow(flat, h, w))
         black_path = flat.filename.parent.absolute() / Path(flat.black_ref).name
-        b0, b1 = read_black_ref(black_path, nd_img)
-        biased_nd_img = nd_img - b1
+        biased_nd_img = apply_local_black_ref(nd_img, black_path)
         norms = color_norm(biased_nd_img)
         corrected.append(unstack_colors(norms))
     flat_file = np.stack(corrected, axis=0)
@@ -351,7 +351,12 @@ async def main(parsed):
     if parsed.build_flat:
         flats = list(Path(parsed.build_flat).glob("*.IA"))
         process_list_of_flats_to_flat(flats)
-        exit(0)
+        return
+    if parsed.dump_meta:
+        for file in Path(parsed.dump_meta).glob("*.IA"):
+            print(f"Saving meta for {file.name}")
+            dump_meta(file, Path(parsed.output))
+        return
 
     output_path = Path(parsed.output)
     os.makedirs(str(output_path.absolute()), exist_ok=True)
@@ -379,6 +384,22 @@ def convert_ia_file_to_dng(f, flat_disable, output_path):
     print(f"Processed: {f.absolute()} to {f_name.absolute()}")
 
 
+def dump_meta(f, output_dir):
+    ia_img = read_sinar(f)
+    # with open(output_dir / ia_img.filename.with_suffix(".json"), "w") as fp:
+    #     fp.write(json.dumps(vars(ia_img), indent=4))
+    with open(output_dir / ia_img.filename.with_suffix(".meta").name, "wb") as fp:
+        print(output_dir / ia_img.filename.with_suffix(".meta").name)
+        fp.write(ia_img.meta)
+
+
+def read_meta(f):
+    with open(f, "rb") as fp:
+        meta = fp.read()
+        ia = process_meta(meta)
+    return ia
+
+
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("-o", "--output", default=".", help="Output directory.")
@@ -399,6 +420,9 @@ if __name__ == "__main__":
     )
     p.add_argument(
         "images", nargs="*", help="List of images or directory of images to process."
+    )
+    p.add_argument(
+        "--dump-meta", default=False, help="Dump meta data of this directory"
     )
     args = p.parse_args()
     asyncio.run(main(args))
