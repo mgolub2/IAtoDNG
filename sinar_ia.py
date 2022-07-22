@@ -1,8 +1,11 @@
 """
+Author: Maximilian Golub
+Copyright: 2022
 
+Convert Sinar IA raw files to the Adobe DNG format.
 """
+
 import argparse
-import json
 import multiprocessing
 import os
 from dataclasses import dataclass, field
