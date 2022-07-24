@@ -1,6 +1,14 @@
 # pyEmotionDNG
 Convert Sinar Emotion 22 (Emotion 54, 54LV) To DNG Files.
 
+## Features
+ * Parses the META section of Sinar IA files and converts them to the proper exif tags.
+ * Is able to find and apply the dark frame/bias frame that emotion 22 backs capture automatically.
+(These are the BR files included with the IA files.)
+ * Applies a manually created white flat to each image. This corrects the
+difference between the two CDD halves and any dust in the optical path.
+
+
 ## Install
 For now, this is not packaged as a Python module.
 You have to clone the repo and run things manually. 
@@ -69,6 +77,8 @@ python3  sinar_ia.py --dump-meta ~/Pictures/emotion22_80mm_f4_iso50_flats/ -o ~/
 
 ## TODO
 * Support other Sinar Emotion models, such as the 75LV.
+* Read and apply the CCD calibration files included with Sinar backs.
 * Tweak meta processing for other Camera bodies, such as the Mamiya AFD.
 * Package this repo into a Python module.
+* Some kind of GUI would be nice.
 * This could all be wrong :) 
