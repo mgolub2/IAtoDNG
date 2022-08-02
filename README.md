@@ -1,5 +1,5 @@
-# pyEmotionDNG
-Convert Sinar Emotion 22 (Emotion 54, 54LV) To DNG Files.
+# IAtoDNG
+Converts Sinar Emotion 22 (Emotion 54, 54LV) and Emotion 75, 75LV .IA files to DNG files.
 
 ## Features
  * Parses the META section of Sinar IA files and converts them to the proper exif tags.
