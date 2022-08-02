@@ -1,5 +1,5 @@
 # IAtoDNG
-Converts Sinar Emotion 22 (Emotion 54, 54LV) and Emotion 75, 75LV .IA files to DNG files.
+Converts Sinar Emotion 22, 54, 54LV, 75, and 75LV .IA files to DNG files.
 
 ## Features
  * Parses the META section of Sinar IA files and converts them to the proper exif tags.
