@@ -163,7 +163,7 @@ def get_raw_pillow(raw: SinarIA, h, w):
     return img
 
 
-def apply_local_black_ref(nd_img: np.array, black_path: Path):
+def apply_local_black_ref_v8(nd_img: np.array, black_path: Path):
     b0, b1 = read_black_ref(black_path, nd_img)
     nd_fp = nd_img - b1
     hot_pixels = b0 - b1
@@ -183,7 +183,7 @@ def apply_local_black_ref(nd_img: np.array, black_path: Path):
 def process_raw(raw: SinarIA, h=5344, w=4008, flat_disable=False):
     img = get_raw_pillow(raw, h, w)
     nd_img = img_as_float(img)
-    nd_img_b = apply_local_black_ref(nd_img, raw.black_path)
+    nd_img_b = apply_local_black_ref_v8(nd_img, raw.black_path)
     if flat_disable:
         nd_img_flat = nd_img_b
     else:
@@ -237,7 +237,7 @@ def create_master_flat(flats, h=5344, w=4008):
             continue
         nd_img = img_as_float(get_raw_pillow(flat, h, w))
         black_path = flat.filename.parent.absolute() / Path(flat.black_ref).name
-        biased_nd_img = apply_local_black_ref(nd_img, black_path)
+        biased_nd_img = apply_local_black_ref_v8(nd_img, black_path)
         norms = color_norm(biased_nd_img)
         corrected.append(unstack_colors(norms))
     flat_file = np.stack(corrected, axis=0)
@@ -288,6 +288,8 @@ def apply_flat(nd_img, iso, lens):
 
 
 MULT = 1000000000
+
+# TODO this is taken from the CCM created by emotionDNG for my back specifically - probably not optimal for others
 CCM1 = [
     [690277635, MULT],
     [81520691, MULT],
@@ -326,6 +328,7 @@ def write_dng(img, nd_int, output_dir, h, w, bpp):
     t.set(Tag.WhiteLevel, [nd_int.max()])
     t.set(Tag.ColorMatrix1, CCM1)
     t.set(Tag.CalibrationIlluminant1, CalibrationIlluminant.Daylight)
+    # TODO There is probably a way to get this from meta or calculate it automatically
     t.set(Tag.AsShotNeutral, [[1, 1], [1, 1], [1, 1]])
     t.set(Tag.Make, img.camera)
     t.set(Tag.Model, MODEL[db_model])
@@ -341,7 +344,7 @@ def write_dng(img, nd_int, output_dir, h, w, bpp):
     t.set(Tag.UniqueCameraModel, f"{MODEL[db_model]} ({img.serial}) on {img.camera}")
     t.set(Tag.FNumber, [(int(img.f_stop * 100), 100)])
     t.set(Tag.BayerGreenSplit, 0)
-    t.set(Tag.Software, f"PYEmotionDNG v{__VERSION__}")
+    t.set(Tag.Software, f"pyEMDNG v{__VERSION__}")
     t.set(Tag.PreviewColorSpace, PreviewColorSpace.sRGB)
     r = RAW2DNG()
     r.options(t, path="", compress=False)
@@ -378,7 +381,7 @@ async def main(parsed):
         threads.append(asyncio.to_thread(t))
     thread_count = multiprocessing.cpu_count()
     for t_group in range(0, len(threads), thread_count):
-        await asyncio.gather(*threads[t_group : t_group + thread_count])
+        await asyncio.gather(*threads[t_group: t_group + thread_count])
 
 
 def convert_ia_file_to_dng(f, flat_disable, output_path):
@@ -389,8 +392,6 @@ def convert_ia_file_to_dng(f, flat_disable, output_path):
 
 def dump_meta(f, output_dir):
     ia_img = read_sinar(f)
-    # with open(output_dir / ia_img.filename.with_suffix(".json"), "w") as fp:
-    #     fp.write(json.dumps(vars(ia_img), indent=4))
     with open(output_dir / ia_img.filename.with_suffix(".meta").name, "wb") as fp:
         print(output_dir / ia_img.filename.with_suffix(".meta").name)
         fp.write(ia_img.meta)
