@@ -32,8 +32,7 @@ __VERSION__ = "0.0.1"
 
 META_KEY = b"META"
 RAW_KEY = b"RAW0"
-MODEL_NAME = {"e22": "Emotion 22",
-         "e75": "Emotion 75"}
+MODEL_NAME = {"e22": "Emotion 22", "e75": "Emotion 75"}
 MODEL_TO_SIZE = {
     "e22": (5344, 4008),
     "e75": (),
@@ -58,6 +57,7 @@ CCM1 = [
     [390943643, MULT],
     [1601514930, MULT],
 ]
+
 
 class WhiteBalance(Enum):
     Manual = 7
@@ -91,7 +91,7 @@ def read_pwad_lumps(raw):
         fe_size = gle(raw[file_entry_start + 4 : file_entry_start + 8])
         name = raw[file_entry_start + 8 : file_entry_start + 16]
         # TODO clean this up
-        lumps[name.split(b'\xa5')[0].split(b'\x00')[0]] = (fe_offset, fe_size)
+        lumps[name.split(b"\xa5")[0].split(b"\x00")[0]] = (fe_offset, fe_size)
     return lumps
 
 
@@ -130,10 +130,10 @@ def process_meta(meta: bytes):
     camera = meta[20:64].decode("ascii").rstrip("\x00")
     white_balance_name = WhiteBalance(gls(meta, 100))
     shutter_time_us = gli(meta, 104)
-    black_ref = meta[108: 108 + 64].decode("ascii").rstrip("\x00")
-    white_ref = meta[172: 172 + 64].decode("ascii").rstrip("\x00")
+    black_ref = meta[108 : 108 + 64].decode("ascii").rstrip("\x00")
+    white_ref = meta[172 : 172 + 64].decode("ascii").rstrip("\x00")
     iso = gli(meta, 252)
-    serial = meta[272: 272 + 16].decode("ascii").rstrip("\x00")
+    serial = meta[272 : 272 + 16].decode("ascii").rstrip("\x00")
     shutter_time_us_2 = gli(meta, 344)
     f_stop = round(gls(meta, 352) / 256, 1)
     focal_length = round(gli(meta, 356) / 1000, 0)
@@ -155,7 +155,7 @@ def process_meta(meta: bytes):
         focal_length=focal_length,
         model=model,
         height=height,
-        width=width
+        width=width,
     )
 
 
@@ -398,7 +398,7 @@ async def main(parsed):
         threads.append(asyncio.to_thread(t))
     thread_count = multiprocessing.cpu_count()
     for t_group in range(0, len(threads), thread_count):
-        await asyncio.gather(*threads[t_group: t_group + thread_count])
+        await asyncio.gather(*threads[t_group : t_group + thread_count])
 
 
 def convert_ia_file_to_dng(f, flat_disable, output_path):
