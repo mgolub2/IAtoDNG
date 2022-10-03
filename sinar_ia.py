@@ -30,16 +30,34 @@ from skimage.util import img_as_float, img_as_uint
 __VERSION__ = "0.0.1"
 
 
-META_KEY = b"META\x00\xa5\xa5\xa5"
-RAW_KEY = b"RAW0\x000\x00\xa5"
-TEST_FILES = Path("test_files_wb")
-MODEL = {"e22": "Emotion 22"}
+META_KEY = b"META"
+RAW_KEY = b"RAW0"
+MODEL_NAME = {"e22": "Emotion 22",
+         "e75": "Emotion 75"}
+MODEL_TO_SIZE = {
+    "e22": (5344, 4008),
+    "e75": (),
+}
 pyEMDNG_HOME = Path(Path.home() / ".local/pyEMDNG")
 FLAT_DIR = pyEMDNG_HOME / "flats"
 pyEMDNG_HOME.mkdir(exist_ok=True)
 FLAT_DIR.mkdir(exist_ok=True)
 FILENAME = "pyEMDNG_flat_iso{iso}_{lens}mm.npy"
+MULT = 1000000000
 
+# TODO this is taken from the CCM created by the original emotionDNG for
+#  my back specifically - probably not optimal for others
+CCM1 = [
+    [690277635, MULT],
+    [81520691, MULT],
+    [-52482637, MULT],
+    [-674076304, MULT],
+    [1469691720, MULT],
+    [769255116, MULT],
+    [-180923460, MULT],
+    [390943643, MULT],
+    [1601514930, MULT],
+]
 
 class WhiteBalance(Enum):
     Manual = 7
@@ -72,7 +90,8 @@ def read_pwad_lumps(raw):
         fe_offset = gle(raw[file_entry_start : file_entry_start + 4])
         fe_size = gle(raw[file_entry_start + 4 : file_entry_start + 8])
         name = raw[file_entry_start + 8 : file_entry_start + 16]
-        lumps[name] = (fe_offset, fe_size)
+        # TODO clean this up
+        lumps[name.split(b'\xa5')[0].split(b'\x00')[0]] = (fe_offset, fe_size)
     return lumps
 
 
@@ -93,12 +112,17 @@ class SinarIA:
     black_ref: str
     iso: int
     serial: str
+    model: str
+    height: int
+    width: int
     white_balance_name: WhiteBalance
     focal_length: float
+    white_ref: str = field(default="")  # Only some backs generate these
     filename: Path = field(default=Path(""))
     raw_data: bytes = field(default_factory=bytes, repr=False)
     meta: bytes = field(default_factory=bytes, repr=False)
-    black_path: Path = field(default=Path(""))
+    black_path: Path = field(default=None)
+    white_path: Path = field(default=None)
 
 
 def process_meta(meta: bytes):
@@ -106,12 +130,16 @@ def process_meta(meta: bytes):
     camera = meta[20:64].decode("ascii").rstrip("\x00")
     white_balance_name = WhiteBalance(gls(meta, 100))
     shutter_time_us = gli(meta, 104)
-    black_ref = meta[108 : 108 + 128].decode("ascii").rstrip("\x00")
+    black_ref = meta[108: 108 + 64].decode("ascii").rstrip("\x00")
+    white_ref = meta[172: 172 + 64].decode("ascii").rstrip("\x00")
     iso = gli(meta, 252)
-    serial = meta[272 : 272 + 16].decode("ascii").rstrip("\x00")
+    serial = meta[272: 272 + 16].decode("ascii").rstrip("\x00")
     shutter_time_us_2 = gli(meta, 344)
     f_stop = round(gls(meta, 352) / 256, 1)
     focal_length = round(gli(meta, 356) / 1000, 0)
+    short_model = serial.split("-")[0]
+    model = MODEL_NAME[short_model]
+    height, width = MODEL_TO_SIZE[short_model]
     return SinarIA(
         shutter_count=shutter_count,
         camera=camera,
@@ -119,11 +147,15 @@ def process_meta(meta: bytes):
         req_shutter_us=shutter_time_us_2,
         f_stop=f_stop,
         black_ref=black_ref,
+        white_ref=white_ref,
         iso=iso,
         serial=serial,
         meta=meta,
         white_balance_name=white_balance_name,
         focal_length=focal_length,
+        model=model,
+        height=height,
+        width=width
     )
 
 
@@ -138,6 +170,10 @@ def read_sinar(path: Path):
     sinar_ia.black_path = (
         sinar_ia.filename.parent.absolute() / Path(sinar_ia.black_ref).name
     )
+    if sinar_ia.white_ref:
+        sinar_ia.white_path = (
+            sinar_ia.filename.parent.absolute() / Path(sinar_ia.white_ref).name
+        )
     return sinar_ia
 
 
@@ -180,7 +216,7 @@ def apply_local_black_ref_v8(nd_img: np.array, black_path: Path):
     return unstack_colors(nd_fp_stack)
 
 
-def process_raw(raw: SinarIA, h=5344, w=4008, flat_disable=False):
+def process_raw(raw: SinarIA, h, w, flat_disable=False):
     img = get_raw_pillow(raw, h, w)
     nd_img = img_as_float(img)
     nd_img_b = apply_local_black_ref_v8(nd_img, raw.black_path)
@@ -223,7 +259,7 @@ def sub(a: np.ndarray, b: np.ndarray):
     return res
 
 
-def create_master_flat(flats, h=5344, w=4008):
+def create_master_flat(flats, h, w):
     corrected = []
     for flat in flats:
         if (
@@ -268,13 +304,13 @@ def unstack_colors(colors):
     return arr
 
 
-def process_list_of_flats_to_flat(flat_files, h=5344, w=4008):
+def process_list_of_flats_to_flat(flat_files):
     ia_flats = [read_sinar(flat) for flat in flat_files]
     f0: SinarIA = ia_flats[0]
     lens = (
         f0.focal_length if f0.focal_length else input("Please enter the focal length: ")
     )
-    corrected = create_master_flat(ia_flats, h, w)
+    corrected = create_master_flat(ia_flats, f0.height, f0.width)
     np.save(str(FLAT_DIR / FILENAME.format(iso=f0.iso, lens=lens)), corrected)
 
 
@@ -287,41 +323,22 @@ def apply_flat(nd_img, iso, lens):
         return nd_img
 
 
-MULT = 1000000000
-
-# TODO this is taken from the CCM created by emotionDNG for my back specifically - probably not optimal for others
-CCM1 = [
-    [690277635, MULT],
-    [81520691, MULT],
-    [-52482637, MULT],
-    [-674076304, MULT],
-    [1469691720, MULT],
-    [769255116, MULT],
-    [-180923460, MULT],
-    [390943643, MULT],
-    [1601514930, MULT],
-]
-
-
-def create_ia_dng(
-    img: SinarIA, output_dir: Path, bpp=16, h=5344, w=4008, flat_disable=False
-):
-    corrected_flat = process_raw(img, h, w, flat_disable)
+def create_ia_dng(img: SinarIA, output_dir: Path, flat_disable=False):
+    corrected_flat = process_raw(img, img.height, img.width, flat_disable)
     nd_int = img_as_uint(corrected_flat)
 
-    filename, r = write_dng(img, nd_int, output_dir, h, w, bpp)
+    filename, r = write_dng(img, nd_int, output_dir)
     return filename, r
 
 
-def write_dng(img, nd_int, output_dir, h, w, bpp):
-    db_model = img.serial.split("-")[0]
+def write_dng(img, nd_int, output_dir):
     t = DNGTags()
-    t.set(Tag.ImageWidth, w)
-    t.set(Tag.ImageLength, h)
+    t.set(Tag.ImageWidth, img.width)
+    t.set(Tag.ImageLength, img.height)
     t.set(Tag.Orientation, 8)  # Rotate 270 CW
     t.set(Tag.PhotometricInterpretation, PhotometricInterpretation.Color_Filter_Array)
     t.set(Tag.SamplesPerPixel, 1)
-    t.set(Tag.BitsPerSample, [bpp])
+    t.set(Tag.BitsPerSample, [16])
     t.set(Tag.CFARepeatPatternDim, [2, 2])
     t.set(Tag.CFAPattern, CFAPattern.RGGB)
     t.set(Tag.BlackLevel, [nd_int.min()])
@@ -331,7 +348,7 @@ def write_dng(img, nd_int, output_dir, h, w, bpp):
     # TODO There is probably a way to get this from meta or calculate it automatically
     t.set(Tag.AsShotNeutral, [[1, 1], [1, 1], [1, 1]])
     t.set(Tag.Make, img.camera)
-    t.set(Tag.Model, MODEL[db_model])
+    t.set(Tag.Model, img.model)
     t.set(Tag.DNGVersion, DNGVersion.V1_4)
     t.set(Tag.DNGBackwardVersion, DNGVersion.V1_4)
     t.set(Tag.EXIFPhotoBodySerialNumber, img.serial)
@@ -341,7 +358,7 @@ def write_dng(img, nd_int, output_dir, h, w, bpp):
     t.set(Tag.SensitivityType, 3)
     t.set(Tag.FocalLengthIn35mmFilm, [int(img.focal_length * 100), 62])
     t.set(Tag.FocalLength, [(int(img.focal_length), 1)])
-    t.set(Tag.UniqueCameraModel, f"{MODEL[db_model]} ({img.serial}) on {img.camera}")
+    t.set(Tag.UniqueCameraModel, f"{img.model} ({img.serial}) on {img.camera}")
     t.set(Tag.FNumber, [(int(img.f_stop * 100), 100)])
     t.set(Tag.BayerGreenSplit, 0)
     t.set(Tag.Software, f"pyEMDNG v{__VERSION__}")
