@@ -2,11 +2,13 @@
 Converts Sinar Emotion 22, 54, 54LV, 75, and 75LV .IA files to DNG files.
 
 ## Features
- * Parses the META section of Sinar IA files and converts them to the proper exif tags.
- * Is able to find and apply the dark frame/bias frame that emotion 22 backs capture automatically.
+ * Parses the META section of Sinar IA files and converts them to the proper exif tags. 
+   * Note - Capture One can't see these for some reason, but Lightroom can.
+ * Is able to find and apply the dark frame/bias frame that emotion 22 and 75 backs capture automatically.
 (These are the BR files included with the IA files.)
- * Applies a manually created white flat to each image. This corrects the
-difference between the two CDD halves and any dust in the optical path.
+ * Uses the .WR flat file produced by emotion 75 backs to correct differences between CCD tiles.
+ * Can Apply a manually created white flat to each image. This corrects the
+difference between the CCD tiles and any dust in the optical path (If using a lens).
 
 
 ## Install
@@ -65,7 +67,7 @@ python3  sinar_ia.py --build-flat ~/Pictures/emotion22_80mm_f4_iso50_flats/
 * There is no limit to the number of files you can use to generate your master flat,
 but the recommendation seems to be 20+ shots. 
 * If the Meta section of the raw file does not have any lens info, then the file is saved 
-with 0.0mm as the focal length - It seems only Rollei AFD lens record their focal length to the raw metadata.
+with 0mm as the focal length - It seems only Rollei AF(D) lens record their focal length to the raw metadata.
 * I recommend creating a "lensless" flat file(s) without any lens mounted, for each ISO 
 to balance the CCD halves and remove sensor dust. Any lens that does not report a focal length
 will use the correct lensless flat file for that iso. 
@@ -76,9 +78,10 @@ python3  sinar_ia.py --dump-meta ~/Pictures/emotion22_80mm_f4_iso50_flats/ -o ~/
 ```
 
 ## TODO
-* Support other Sinar Emotion models, such as the 75LV.
 * Read and apply the CCD calibration files included with Sinar backs.
+  * This is possibly already captured by emotion 75 .WR files.
+* Understand and apply the LINEAR and BLEMISH components of .WR files.
 * Tweak meta processing for other Camera bodies, such as the Mamiya AFD.
 * Package this repo into a Python module.
-* Some kind of GUI would be nice.
+* Some kind of GUI.
 * This could all be wrong :) 
