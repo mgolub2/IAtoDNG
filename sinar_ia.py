@@ -26,8 +26,9 @@ from pidng.defs import (
     PreviewColorSpace,
 )
 from skimage.util import img_as_float, img_as_uint
+from skimage.exposure import rescale_intensity
 
-__VERSION__ = "0.0.1"
+__VERSION__ = "0.1.0"
 
 
 META_KEY = b"META"
@@ -73,8 +74,8 @@ class WhiteBalance(Enum):
         return str(self.name)
 
 
-def get_wad(raw, start, offset):
-    return raw[start : start + offset]
+def get_wad(byte_data: bytes, start, offset):
+    return byte_data[start: start + offset]
 
 
 def read_raw(path):
@@ -185,10 +186,10 @@ def read_black_ref(path: Path, nd_img: np.ndarray):
     black1 = get_wad(black, *lumps[b"BLACK1"])
     h, w = nd_img.shape  # int. flipped
     black0_img = img_as_float(
-        np.asarray(Image.frombytes("I;16L", (w, h), black0, "raw"))
+        Image.frombytes("I;16L", (w, h), black0, "raw")
     )
     black1_img = img_as_float(
-        np.asarray(Image.frombytes("I;16L", (w, h), black1, "raw"))
+        Image.frombytes("I;16L", (w, h), black1, "raw")
     )
     return black0_img, black1_img
 
@@ -217,7 +218,7 @@ def apply_local_black_ref_v8(nd_img: np.array, black_path: Path):
     return unstack_colors(nd_fp_stack)
 
 
-def process_raw(raw: SinarIA, flat_disable=False):
+def process_raw(raw: SinarIA, flat_disable=False, rescale=True, clip=False):
     img = get_raw_pillow(raw)
     nd_img = img_as_float(img)
     nd_img_b = apply_local_black_ref_v8(nd_img, raw.black_path)
@@ -226,6 +227,10 @@ def process_raw(raw: SinarIA, flat_disable=False):
     else:
         # TODO figure out better way to ident files, or build lensless flat?
         nd_img_flat = apply_flat(raw, nd_img_b)
+    if rescale:
+        nd_img_flat = rescale_intensity(nd_img_flat)
+    if clip:
+        nd_img_flat.clip(0, 1)
     return nd_img_flat
 
 
@@ -319,7 +324,8 @@ def apply_flat(raw: SinarIA, nd_img, use_lens=True):
         try:
             flat_file = read_raw(raw.white_path)
             lumps = read_pwad_lumps(flat_file)
-            flat = get_wad(raw, *lumps[b'WHITE'])
+            flat_bytes = get_wad(flat_file, *lumps[b'WHITE'])
+            flat = img_as_float(Image.frombytes("I;16L", (raw.width, raw.height), flat_bytes, "raw"))
         except FileNotFoundError:
             print(f"Missing flat file: {raw.white_path}")
             return nd_img
