@@ -35,7 +35,7 @@ RAW_KEY = b"RAW0"
 MODEL_NAME = {"e22": "Emotion 22", "e75": "Emotion 75"}
 MODEL_TO_SIZE = {
     "e22": (5344, 4008),
-    "e75": (),
+    "e75": (6668, 4992),
 }
 pyEMDNG_HOME = Path(Path.home() / ".local/pyEMDNG")
 FLAT_DIR = pyEMDNG_HOME / "flats"
@@ -67,6 +67,7 @@ class WhiteBalance(Enum):
     Shadow = 3
     Sun = 4
     Cloudy = 5
+    Unknown = 6
 
     def __str__(self):
         return str(self.name)
@@ -116,7 +117,7 @@ class SinarIA:
     height: int
     width: int
     white_balance_name: WhiteBalance
-    focal_length: float
+    focal_length: int
     white_ref: str = field(default="")  # Only some backs generate these
     filename: Path = field(default=Path(""))
     raw_data: bytes = field(default_factory=bytes, repr=False)
@@ -136,7 +137,7 @@ def process_meta(meta: bytes):
     serial = meta[272 : 272 + 16].decode("ascii").rstrip("\x00")
     shutter_time_us_2 = gli(meta, 344)
     f_stop = round(gls(meta, 352) / 256, 1)
-    focal_length = round(gli(meta, 356) / 1000, 0)
+    focal_length = int(round(gli(meta, 356) / 1000, 0))
     short_model = serial.split("-")[0]
     model = MODEL_NAME[short_model]
     height, width = MODEL_TO_SIZE[short_model]
@@ -180,8 +181,8 @@ def read_sinar(path: Path):
 def read_black_ref(path: Path, nd_img: np.ndarray):
     black = read_raw(path)
     lumps = read_pwad_lumps(black)
-    black0 = get_wad(black, *lumps[b"BLACK0\x00\xa5"])
-    black1 = get_wad(black, *lumps[b"BLACK1\x00\xa5"])
+    black0 = get_wad(black, *lumps[b"BLACK0"])
+    black1 = get_wad(black, *lumps[b"BLACK1"])
     h, w = nd_img.shape  # int. flipped
     black0_img = img_as_float(
         np.asarray(Image.frombytes("I;16L", (w, h), black0, "raw"))
@@ -192,10 +193,10 @@ def read_black_ref(path: Path, nd_img: np.ndarray):
     return black0_img, black1_img
 
 
-def get_raw_pillow(raw: SinarIA, h, w):
+def get_raw_pillow(raw: SinarIA):
     raw0 = raw.raw_data
-    assert (h * w * 16) / 8 == len(raw0)
-    img = Image.frombytes("I;16L", (w, h), raw0, "raw")
+    assert (raw.height * raw.width * 16) / 8 == len(raw0)
+    img = Image.frombytes("I;16L", (raw.width, raw.height), raw0, "raw")
     return img
 
 
@@ -216,16 +217,15 @@ def apply_local_black_ref_v8(nd_img: np.array, black_path: Path):
     return unstack_colors(nd_fp_stack)
 
 
-def process_raw(raw: SinarIA, h, w, flat_disable=False):
-    img = get_raw_pillow(raw, h, w)
+def process_raw(raw: SinarIA, flat_disable=False):
+    img = get_raw_pillow(raw)
     nd_img = img_as_float(img)
     nd_img_b = apply_local_black_ref_v8(nd_img, raw.black_path)
     if flat_disable:
         nd_img_flat = nd_img_b
     else:
         # TODO figure out better way to ident files, or build lensless flat?
-        iso, focal = raw.iso, raw.focal_length
-        nd_img_flat = apply_flat(nd_img_b, 50, focal)
+        nd_img_flat = apply_flat(raw, nd_img_b)
     return nd_img_flat
 
 
@@ -271,7 +271,7 @@ def create_master_flat(flats, h, w):
                 f"Skipping {flat.filename}, shutter speed was {flat.measured_shutter_us}uS, requested {flat.req_shutter_us}uS!"
             )
             continue
-        nd_img = img_as_float(get_raw_pillow(flat, h, w))
+        nd_img = img_as_float(get_raw_pillow(flat))
         black_path = flat.filename.parent.absolute() / Path(flat.black_ref).name
         biased_nd_img = apply_local_black_ref_v8(nd_img, black_path)
         norms = color_norm(biased_nd_img)
@@ -314,17 +314,31 @@ def process_list_of_flats_to_flat(flat_files):
     np.save(str(FLAT_DIR / FILENAME.format(iso=f0.iso, lens=lens)), corrected)
 
 
-def apply_flat(nd_img, iso, lens):
-    try:
-        flat = np.load(str(FLAT_DIR / FILENAME.format(iso=iso, lens=lens)))
-        return nd_img / flat
-    except FileNotFoundError:
-        print(f"No flat file exists iso{iso}, {lens}mm !")
-        return nd_img
+def apply_flat(raw: SinarIA, nd_img, use_lens=True):
+    if raw.white_ref:
+        try:
+            flat_file = read_raw(raw.white_path)
+            lumps = read_pwad_lumps(flat_file)
+            flat = get_wad(raw, *lumps[b'WHITE'])
+        except FileNotFoundError:
+            print(f"Missing flat file: {raw.white_path}")
+            return nd_img
+    else:
+        # Use custom-built flat vs. integrated one.
+        iso, lens = raw.iso, raw.focal_length
+        try:
+            if use_lens and lens:
+                flat = np.load(str(FLAT_DIR / FILENAME.format(iso=iso, lens=lens)))
+            else:
+                flat = np.load(str(FLAT_DIR / FILENAME.format(iso=iso, lens=lens)))
+        except FileNotFoundError:
+            print(f"No flat file exists iso{iso}, {lens}mm !")
+            return nd_img
+    return nd_img / flat
 
 
 def create_ia_dng(img: SinarIA, output_dir: Path, flat_disable=False):
-    corrected_flat = process_raw(img, img.height, img.width, flat_disable)
+    corrected_flat = process_raw(img, flat_disable)
     nd_int = img_as_uint(corrected_flat)
 
     filename, r = write_dng(img, nd_int, output_dir)
