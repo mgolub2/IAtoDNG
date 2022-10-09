@@ -218,7 +218,7 @@ def apply_local_black_ref_v8(nd_img: np.array, black_path: Path):
     return unstack_colors(nd_fp_stack)
 
 
-def process_raw(raw: SinarIA, flat_disable=False, rescale=True, clip=False):
+def process_raw(raw: SinarIA, flat_disable=False, rescale=False, clip=True):
     img = get_raw_pillow(raw)
     nd_img = img_as_float(img)
     nd_img_b = apply_local_black_ref_v8(nd_img, raw.black_path)
@@ -230,7 +230,7 @@ def process_raw(raw: SinarIA, flat_disable=False, rescale=True, clip=False):
     if rescale:
         nd_img_flat = rescale_intensity(nd_img_flat)
     if clip:
-        nd_img_flat.clip(0, 1)
+        nd_img_flat = nd_img_flat.clip(0, 1)
     return nd_img_flat
 
 
