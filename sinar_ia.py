@@ -75,7 +75,7 @@ class WhiteBalance(Enum):
 
 
 def get_wad(byte_data: bytes, start, offset):
-    return byte_data[start: start + offset]
+    return byte_data[start : start + offset]
 
 
 def read_raw(path):
@@ -185,12 +185,8 @@ def read_black_ref(path: Path, nd_img: np.ndarray):
     black0 = get_wad(black, *lumps[b"BLACK0"])
     black1 = get_wad(black, *lumps[b"BLACK1"])
     h, w = nd_img.shape  # int. flipped
-    black0_img = img_as_float(
-        Image.frombytes("I;16L", (w, h), black0, "raw")
-    )
-    black1_img = img_as_float(
-        Image.frombytes("I;16L", (w, h), black1, "raw")
-    )
+    black0_img = img_as_float(Image.frombytes("I;16L", (w, h), black0, "raw"))
+    black1_img = img_as_float(Image.frombytes("I;16L", (w, h), black1, "raw"))
     return black0_img, black1_img
 
 
@@ -324,8 +320,10 @@ def apply_flat(raw: SinarIA, nd_img, use_lens=True):
         try:
             flat_file = read_raw(raw.white_path)
             lumps = read_pwad_lumps(flat_file)
-            flat_bytes = get_wad(flat_file, *lumps[b'WHITE'])
-            flat = img_as_float(Image.frombytes("I;16L", (raw.width, raw.height), flat_bytes, "raw"))
+            flat_bytes = get_wad(flat_file, *lumps[b"WHITE"])
+            flat = img_as_float(
+                Image.frombytes("I;16L", (raw.width, raw.height), flat_bytes, "raw")
+            )
         except FileNotFoundError:
             print(f"Missing flat file: {raw.white_path}")
             return nd_img
