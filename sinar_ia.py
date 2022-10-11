@@ -15,6 +15,7 @@ from pathlib import Path
 import asyncio
 
 import numpy as np
+from PIL.Image import Transpose
 from scipy.signal import medfilt2d
 from PIL import Image
 from pidng.core import RAW2DNG, DNGTags, Tag
@@ -25,14 +26,15 @@ from pidng.defs import (
     DNGVersion,
     PreviewColorSpace,
 )
+
 from skimage.util import img_as_float, img_as_uint
-from skimage.exposure import rescale_intensity
 
-__VERSION__ = "0.1.0"
-
+__VERSION__ = "0.1.1"
 
 META_KEY = b"META"
 RAW_KEY = b"RAW0"
+THUMB_KEY = b'THUMB'
+
 MODEL_NAME = {"e22": "Emotion 22", "e75": "Emotion 75"}
 MODEL_TO_SIZE = {
     "e22": (5344, 4008),
@@ -75,7 +77,7 @@ class WhiteBalance(Enum):
 
 
 def get_wad(byte_data: bytes, start, offset):
-    return byte_data[start : start + offset]
+    return byte_data[start: start + offset]
 
 
 def read_raw(path):
@@ -89,9 +91,9 @@ def read_pwad_lumps(raw):
     file_type, num_file, offset = get_pwad_info(raw)
     for file_number in range(num_file):
         file_entry_start = offset + file_number * 16
-        fe_offset = gle(raw[file_entry_start : file_entry_start + 4])
-        fe_size = gle(raw[file_entry_start + 4 : file_entry_start + 8])
-        name = raw[file_entry_start + 8 : file_entry_start + 16]
+        fe_offset = gle(raw[file_entry_start: file_entry_start + 4])
+        fe_size = gle(raw[file_entry_start + 4: file_entry_start + 8])
+        name = raw[file_entry_start + 8: file_entry_start + 16]
         # TODO clean this up
         lumps[name.split(b"\xa5")[0].split(b"\x00")[0]] = (fe_offset, fe_size)
     return lumps
@@ -125,6 +127,7 @@ class SinarIA:
     meta: bytes = field(default_factory=bytes, repr=False)
     black_path: Path = field(default=None)
     white_path: Path = field(default=None)
+    thumb: Image = field(default=None)
 
 
 def process_meta(meta: bytes):
@@ -132,10 +135,10 @@ def process_meta(meta: bytes):
     camera = meta[20:64].decode("ascii").rstrip("\x00")
     white_balance_name = WhiteBalance(gls(meta, 100))
     shutter_time_us = gli(meta, 104)
-    black_ref = meta[108 : 108 + 64].decode("ascii").rstrip("\x00")
-    white_ref = meta[172 : 172 + 64].decode("ascii").rstrip("\x00")
+    black_ref = meta[108: 108 + 64].decode("ascii").rstrip("\x00")
+    white_ref = meta[172: 172 + 64].decode("ascii").rstrip("\x00")
     iso = gli(meta, 252)
-    serial = meta[272 : 272 + 16].decode("ascii").rstrip("\x00")
+    serial = meta[272: 272 + 16].decode("ascii").rstrip("\x00")
     shutter_time_us_2 = gli(meta, 344)
     f_stop = round(gls(meta, 352) / 256, 1)
     focal_length = int(round(gli(meta, 356) / 1000, 0))
@@ -167,14 +170,16 @@ def read_sinar(path: Path):
     meta = get_wad(raw, *lumps[META_KEY])
     sinar_ia = process_meta(meta)
     raw_data = get_wad(raw, *lumps[RAW_KEY])
+    thumb = get_wad(raw, *lumps[THUMB_KEY])
+    sinar_ia.thumb = Image.frombytes("RGB", (356, 476), thumb[:-15920], "raw")
     sinar_ia.raw_data = raw_data
     sinar_ia.filename = path
     sinar_ia.black_path = (
-        sinar_ia.filename.parent.absolute() / Path(sinar_ia.black_ref).name
+            sinar_ia.filename.parent.absolute() / Path(sinar_ia.black_ref).name
     )
     if sinar_ia.white_ref:
         sinar_ia.white_path = (
-            sinar_ia.filename.parent.absolute() / Path(sinar_ia.white_ref).name
+                sinar_ia.filename.parent.absolute() / Path(sinar_ia.white_ref).name
         )
     return sinar_ia
 
@@ -197,6 +202,12 @@ def get_raw_pillow(raw: SinarIA):
     return img
 
 
+def apply_local_black_simple(nd_img: np.array, black_path: Path):
+    b0, b1 = read_black_ref(black_path, nd_img)
+    nd_fp = (nd_img - b0) - (b1 - b0)
+    return nd_fp
+
+
 def apply_local_black_ref_v8(nd_img: np.array, black_path: Path):
     b0, b1 = read_black_ref(black_path, nd_img)
     nd_fp = nd_img - b1
@@ -214,17 +225,21 @@ def apply_local_black_ref_v8(nd_img: np.array, black_path: Path):
     return unstack_colors(nd_fp_stack)
 
 
-def process_raw(raw: SinarIA, flat_disable=False, rescale=False, clip=True):
+def process_raw(raw: SinarIA, dark_disable=False, flat_disable=False, clip=True, simple_dark=True):
     img = get_raw_pillow(raw)
     nd_img = img_as_float(img)
-    nd_img_b = apply_local_black_ref_v8(nd_img, raw.black_path)
+    if dark_disable:
+        nd_img_b = nd_img
+    else:
+        if simple_dark:
+            nd_img_b = apply_local_black_simple(nd_img, raw.black_path)
+        else:
+            nd_img_b = apply_local_black_ref_v8(nd_img, raw.black_path)
     if flat_disable:
         nd_img_flat = nd_img_b
     else:
         # TODO figure out better way to ident files, or build lensless flat?
         nd_img_flat = apply_flat(raw, nd_img_b)
-    if rescale:
-        nd_img_flat = rescale_intensity(nd_img_flat)
     if clip:
         nd_img_flat = nd_img_flat.clip(0, 1)
     return nd_img_flat
@@ -247,11 +262,11 @@ def gle(b):
 
 
 def gli(b, s):
-    return int.from_bytes(b[s : s + 4], byteorder="little")
+    return int.from_bytes(b[s: s + 4], byteorder="little")
 
 
 def gls(b, s):
-    return int.from_bytes(b[s : s + 2], byteorder="little")
+    return int.from_bytes(b[s: s + 2], byteorder="little")
 
 
 def sub(a: np.ndarray, b: np.ndarray):
@@ -264,8 +279,8 @@ def create_master_flat(flats, h, w):
     corrected = []
     for flat in flats:
         if (
-            abs(flat.measured_shutter_us - flat.req_shutter_us) / flat.req_shutter_us
-            > 0.5
+                abs(flat.measured_shutter_us - flat.req_shutter_us) / flat.req_shutter_us
+                > 0.5
         ):
             # Our shutter was more than 50% slower than requested, skip this file
             print(
@@ -341,12 +356,18 @@ def apply_flat(raw: SinarIA, nd_img, use_lens=True):
     return nd_img / flat
 
 
-def create_ia_dng(img: SinarIA, output_dir: Path, flat_disable=False):
-    corrected_flat = process_raw(img, flat_disable)
+def create_ia_dng(img: SinarIA, output_dir: Path, flat_disable=False, dark_disable=False):
+    corrected_flat = process_raw(img, flat_disable=flat_disable, dark_disable=dark_disable)
     nd_int = img_as_uint(corrected_flat)
-
     filename, r = write_dng(img, nd_int, output_dir)
     return filename, r
+
+
+def thumb_correct(img: SinarIA) -> Image:
+    return img.thumb.transpose(Transpose.ROTATE_90)
+    #int_img = img_as_float(img.thumb)
+    #int_img = img_as_ubyte(equalize_adapthist(int_img).astype(np.uint8))
+    #return Image.fromarray(int_img, mode='RGB').transpose(Transpose.ROTATE_90)
 
 
 def write_dng(img, nd_int, output_dir):
@@ -416,7 +437,7 @@ async def main(parsed):
         threads.append(asyncio.to_thread(t))
     thread_count = multiprocessing.cpu_count()
     for t_group in range(0, len(threads), thread_count):
-        await asyncio.gather(*threads[t_group : t_group + thread_count])
+        await asyncio.gather(*threads[t_group: t_group + thread_count])
 
 
 def convert_ia_file_to_dng(f, flat_disable, output_path):
