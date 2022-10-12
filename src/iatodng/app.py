@@ -6,14 +6,14 @@ import toga
 from toga import Group
 from toga.style.pack import COLUMN, Pack
 
-from .sinar_ia import read_sinar, create_ia_dng, thumb_correct
+from sinar_ia import read_sinar, create_ia_dng, thumb_correct
 
 
 async def process_file(file_path: Path, output_dir: Path, table_index):
     if output_dir is None:
         output_dir = Path('.').resolve()
     raw = await read_sinar(file_path)
-    create_ia_dng(raw, output_dir)
+    await create_ia_dng(raw, output_dir)
     return table_index
 
 
@@ -51,7 +51,7 @@ class IaApp(toga.App):
             style=Pack(direction=COLUMN, padding=50)
         )
         self.console = toga.Label(text=self.text_state())
-        self.img_view = toga.ImageView(id='view1', image=toga.Image(path='resources/iatodng.png'))
+        self.img_view = toga.ImageView(id='view1', image=toga.Image(path='resources/iatodng.jpg'))
         self.right_container.add(self.img_view)
         self.right_container.add(toga.Divider())
         scroll = toga.ScrollContainer(content=self.console)
@@ -73,10 +73,10 @@ class IaApp(toga.App):
         )
         open_folder_cmd = toga.Command(
             self.open_folder,
-            text='Open Folder',
+            text='Input Folder',
             tooltip='Opens a folder of Sinar .IA images',
             shortcut=toga.Key.MOD_1 + 'o',
-            icon='icons/pretty.png',
+            icon='resources/folder.png',
             group=Group.FILE,
             order=1,
         )
@@ -85,7 +85,7 @@ class IaApp(toga.App):
             text='Output Folder',
             tooltip='Select the output folder for your DNGs',
             shortcut=toga.Key.MOD_1 + 'd',
-            icon='icons/brutus',
+            icon='resources/export.png',
             group=Group.FILE,
             order=2,
         )
@@ -94,7 +94,7 @@ class IaApp(toga.App):
             text='Convert',
             tooltip='Converts .IA files listed to DNGs.',
             shortcut=toga.Key.MOD_1 + 'p',
-            icon='icons/brutus',
+            icon='resources/start.png',
             group=Group.FILE,
             order=3,
         )
@@ -181,7 +181,7 @@ class IaApp(toga.App):
 
 
 def main():
-    return IaApp('IAtoDNG', 'io.maxg.iatodng')
+    return IaApp('IAtoDNG', 'io.maxg.iatodng', icon='resources/logo.png')
 
 
 if __name__ == '__main__':
