@@ -5,17 +5,15 @@ Copyright: 2022
 Convert Sinar IA raw files to the Adobe DNG format.
 """
 
-import argparse
-import multiprocessing
-import os
 from dataclasses import dataclass, field
 from enum import Enum
-from functools import partial
 from pathlib import Path
-import asyncio
 
-import numpy as np
+# import numpy as np
 from PIL.Image import Transpose
+from numpy import greater, array, clip, stack, median, empty, save, load
+from numpy import min as npmin
+from numpy import max as npmax
 from scipy.signal import medfilt2d
 from PIL import Image
 from pidng.core import RAW2DNG, DNGTags, Tag
@@ -29,7 +27,7 @@ from pidng.defs import (
 
 from skimage.util import img_as_float, img_as_uint
 
-__VERSION__ = "0.1.1"
+__VERSION__ = "0.2.0"
 
 META_KEY = b"META"
 RAW_KEY = b"RAW0"
@@ -76,17 +74,17 @@ class WhiteBalance(Enum):
         return str(self.name)
 
 
-def get_wad(byte_data: bytes, start, offset):
+async def get_wad(byte_data: bytes, start, offset):
     return byte_data[start: start + offset]
 
 
-def read_raw(path):
+async def read_raw(path):
     with open(path, "rb") as raw_fp:
         raw = raw_fp.read()
     return raw
 
 
-def read_pwad_lumps(raw):
+async def read_pwad_lumps(raw):
     lumps = {}
     file_type, num_file, offset = get_pwad_info(raw)
     for file_number in range(num_file):
@@ -130,7 +128,7 @@ class SinarIA:
     thumb: Image = field(default=None)
 
 
-def process_meta(meta: bytes):
+async def process_meta(meta: bytes):
     shutter_count = gli(meta, 4)
     camera = meta[20:64].decode("ascii").rstrip("\x00")
     white_balance_name = WhiteBalance(gls(meta, 100))
@@ -164,13 +162,13 @@ def process_meta(meta: bytes):
     )
 
 
-def read_sinar(path: Path):
-    raw = read_raw(path)
-    lumps = read_pwad_lumps(raw)
-    meta = get_wad(raw, *lumps[META_KEY])
-    sinar_ia = process_meta(meta)
-    raw_data = get_wad(raw, *lumps[RAW_KEY])
-    thumb = get_wad(raw, *lumps[THUMB_KEY])
+async def read_sinar(path: Path):
+    raw = await read_raw(path)
+    lumps = await read_pwad_lumps(raw)
+    meta = await get_wad(raw, *lumps[META_KEY])
+    sinar_ia = await process_meta(meta)
+    raw_data = await get_wad(raw, *lumps[RAW_KEY])
+    thumb = await get_wad(raw, *lumps[THUMB_KEY])
     sinar_ia.thumb = Image.frombytes("RGB", (356, 476), thumb[:-15920], "raw")
     sinar_ia.raw_data = raw_data
     sinar_ia.filename = path
@@ -184,37 +182,39 @@ def read_sinar(path: Path):
     return sinar_ia
 
 
-def read_black_ref(path: Path, nd_img: np.ndarray):
-    black = read_raw(path)
-    lumps = read_pwad_lumps(black)
-    black0 = get_wad(black, *lumps[b"BLACK0"])
-    black1 = get_wad(black, *lumps[b"BLACK1"])
+# noinspection PyTypeChecker
+async def read_black_ref(path: Path, nd_img: array):
+    black = await read_raw(path)
+    lumps = await read_pwad_lumps(black)
+    black0 = await get_wad(black, *lumps[b"BLACK0"])
+    black1 = await get_wad(black, *lumps[b"BLACK1"])
     h, w = nd_img.shape  # int. flipped
     black0_img = img_as_float(Image.frombytes("I;16L", (w, h), black0, "raw"))
     black1_img = img_as_float(Image.frombytes("I;16L", (w, h), black1, "raw"))
     return black0_img, black1_img
 
 
-def get_raw_pillow(raw: SinarIA):
+# noinspection PyTypeChecker
+async def get_raw_pillow(raw: SinarIA):
     raw0 = raw.raw_data
     assert (raw.height * raw.width * 16) / 8 == len(raw0)
     img = Image.frombytes("I;16L", (raw.width, raw.height), raw0, "raw")
     return img
 
 
-def apply_local_black_simple(nd_img: np.array, black_path: Path):
-    b0, b1 = read_black_ref(black_path, nd_img)
+async def apply_local_black_simple(nd_img: array, black_path: Path):
+    b0, b1 = await read_black_ref(black_path, nd_img)
     nd_fp = (nd_img - b0) - (b1 - b0)
     return nd_fp
 
 
-def apply_local_black_ref_v8(nd_img: np.array, black_path: Path):
-    b0, b1 = read_black_ref(black_path, nd_img)
+async def apply_local_black_ref_v8(nd_img: array, black_path: Path):
+    b0, b1 = await read_black_ref(black_path, nd_img)
     nd_fp = nd_img - b1
     hot_pixels = b0 - b1
     nd_fp_stack = get_colors(nd_fp)
     hot_pixel_stack = get_colors(hot_pixels)
-    pixel_mask = np.greater(hot_pixel_stack, 0)
+    pixel_mask = greater(hot_pixel_stack, 0)
     # Because scipy does not have way to run median filter on specific axis (or, I don't know how to at least)
     for i in range(4):
         color = nd_fp_stack[::, ::, i]
@@ -225,32 +225,34 @@ def apply_local_black_ref_v8(nd_img: np.array, black_path: Path):
     return unstack_colors(nd_fp_stack)
 
 
-def process_raw(raw: SinarIA, dark_disable=False, flat_disable=False, clip=True, simple_dark=True):
-    img = get_raw_pillow(raw)
+async def process_raw(raw: SinarIA, dark_disable=False, flat_disable=False, simple_dark=True):
+    img = await get_raw_pillow(raw)
     nd_img = img_as_float(img)
+
     if dark_disable:
         nd_img_b = nd_img
     else:
         if simple_dark:
-            nd_img_b = apply_local_black_simple(nd_img, raw.black_path)
+            nd_img_b = await apply_local_black_simple(nd_img, raw.black_path)
         else:
-            nd_img_b = apply_local_black_ref_v8(nd_img, raw.black_path)
+            nd_img_b = await apply_local_black_ref_v8(nd_img, raw.black_path)
+
     if flat_disable:
         nd_img_flat = nd_img_b
     else:
         # TODO figure out better way to ident files, or build lensless flat?
-        nd_img_flat = apply_flat(raw, nd_img_b)
-    if clip:
-        nd_img_flat = nd_img_flat.clip(0, 1)
+        nd_img_flat = await apply_flat(raw, nd_img_b)
+
+    nd_img_flat = nd_img_flat.clip(0, 1)
     return nd_img_flat
 
 
 def norm2(x):
-    return np.clip((x - x.max()) * (1 / (x.min() - x.max())), 0, 1)
+    return clip((x - x.max()) * (1 / (x.min() - x.max())), 0, 1)
 
 
 def norm(x):
-    return (x - np.min(x)) / (np.max(x) - np.min(x))
+    return (x - npmin(x)) / (npmax(x) - npmin(x))
 
 
 def c_norm(x, c_min, c_max):
@@ -269,13 +271,13 @@ def gls(b, s):
     return int.from_bytes(b[s: s + 2], byteorder="little")
 
 
-def sub(a: np.ndarray, b: np.ndarray):
+def sub(a: array, b: array):
     res = a - b
     res[b > a] = 0
     return res
 
 
-def create_master_flat(flats, h, w):
+async def create_master_flat(flats):
     corrected = []
     for flat in flats:
         if (
@@ -284,16 +286,17 @@ def create_master_flat(flats, h, w):
         ):
             # Our shutter was more than 50% slower than requested, skip this file
             print(
-                f"Skipping {flat.filename}, shutter speed was {flat.measured_shutter_us}uS, requested {flat.req_shutter_us}uS!"
+                f"Skipping {flat.filename}, shutter speed was {flat.measured_shutter_us}uS, "
+                f"requested {flat.req_shutter_us}uS!"
             )
             continue
-        nd_img = img_as_float(get_raw_pillow(flat))
+        nd_img = img_as_float(await get_raw_pillow(flat))
         black_path = flat.filename.parent.absolute() / Path(flat.black_ref).name
         biased_nd_img = apply_local_black_ref_v8(nd_img, black_path)
         norms = color_norm(biased_nd_img)
         corrected.append(unstack_colors(norms))
-    flat_file = np.stack(corrected, axis=0)
-    return np.median(flat_file, axis=0)
+    flat_file = stack(corrected, axis=0)
+    return median(flat_file, axis=0)
 
 
 def color_norm(flat):
@@ -307,12 +310,12 @@ def get_colors(arr):
     blue = arr[0::2, 1::2]
     red = arr[1::2, 0::2]
     green2 = arr[1::2, 1::2]
-    return np.stack([green1, blue, red, green2], axis=-1)
+    return stack([green1, blue, red, green2], axis=-1)
 
 
 def unstack_colors(colors):
     shape = [i * 2 for i in colors.shape[:-1]]
-    arr = np.empty(shape=shape)
+    arr = empty(shape=shape)
     arr[0::2, 0::2] = colors[::, ::, 0]
     arr[0::2, 1::2] = colors[::, ::, 1]
     arr[1::2, 0::2] = colors[::, ::, 2]
@@ -320,22 +323,23 @@ def unstack_colors(colors):
     return arr
 
 
-def process_list_of_flats_to_flat(flat_files):
-    ia_flats = [read_sinar(flat) for flat in flat_files]
+async def process_list_of_flats_to_flat(flat_files):
+    ia_flats = [await read_sinar(flat) for flat in flat_files]
     f0: SinarIA = ia_flats[0]
     lens = (
         f0.focal_length if f0.focal_length else input("Please enter the focal length: ")
     )
-    corrected = create_master_flat(ia_flats, f0.height, f0.width)
-    np.save(str(FLAT_DIR / FILENAME.format(iso=f0.iso, lens=lens)), corrected)
+    corrected = await create_master_flat(ia_flats)
+    save(str(FLAT_DIR / FILENAME.format(iso=f0.iso, lens=lens)), corrected)
 
 
-def apply_flat(raw: SinarIA, nd_img, use_lens=True):
+# noinspection PyTypeChecker
+async def apply_flat(raw: SinarIA, nd_img, use_lens=True):
     if raw.white_ref:
         try:
-            flat_file = read_raw(raw.white_path)
-            lumps = read_pwad_lumps(flat_file)
-            flat_bytes = get_wad(flat_file, *lumps[b"WHITE"])
+            flat_file = await read_raw(raw.white_path)
+            lumps = await read_pwad_lumps(flat_file)
+            flat_bytes = await get_wad(flat_file, *lumps[b"WHITE"])
             flat = img_as_float(
                 Image.frombytes("I;16L", (raw.width, raw.height), flat_bytes, "raw")
             )
@@ -347,30 +351,27 @@ def apply_flat(raw: SinarIA, nd_img, use_lens=True):
         iso, lens = raw.iso, raw.focal_length
         try:
             if use_lens and lens:
-                flat = np.load(str(FLAT_DIR / FILENAME.format(iso=iso, lens=lens)))
+                flat = load(str(FLAT_DIR / FILENAME.format(iso=iso, lens=lens)))
             else:
-                flat = np.load(str(FLAT_DIR / FILENAME.format(iso=iso, lens=lens)))
+                flat = load(str(FLAT_DIR / FILENAME.format(iso=iso, lens=lens)))
         except FileNotFoundError:
             print(f"No flat file exists iso{iso}, {lens}mm !")
             return nd_img
     return nd_img / flat
 
 
-def create_ia_dng(img: SinarIA, output_dir: Path, flat_disable=False, dark_disable=False):
-    corrected_flat = process_raw(img, flat_disable=flat_disable, dark_disable=dark_disable)
+async def create_ia_dng(img: SinarIA, output_dir: Path, flat_disable=False, dark_disable=False):
+    corrected_flat = await process_raw(img, flat_disable=flat_disable, dark_disable=dark_disable)
     nd_int = img_as_uint(corrected_flat)
-    filename, r = write_dng(img, nd_int, output_dir)
+    filename, r = await write_dng(img, nd_int, output_dir)
     return filename, r
 
 
 def thumb_correct(img: SinarIA) -> Image:
     return img.thumb.transpose(Transpose.ROTATE_90)
-    #int_img = img_as_float(img.thumb)
-    #int_img = img_as_ubyte(equalize_adapthist(int_img).astype(np.uint8))
-    #return Image.fromarray(int_img, mode='RGB').transpose(Transpose.ROTATE_90)
 
 
-def write_dng(img, nd_int, output_dir):
+async def write_dng(img, nd_int, output_dir):
     t = DNGTags()
     t.set(Tag.ImageWidth, img.width)
     t.set(Tag.ImageLength, img.height)
@@ -400,7 +401,7 @@ def write_dng(img, nd_int, output_dir):
     t.set(Tag.UniqueCameraModel, f"{img.model} ({img.serial}) on {img.camera}")
     t.set(Tag.FNumber, [(int(img.f_stop * 100), 100)])
     t.set(Tag.BayerGreenSplit, 0)
-    t.set(Tag.Software, f"pyEMDNG v{__VERSION__}")
+    t.set(Tag.Software, f"IAtoDNG v{__VERSION__}")
     t.set(Tag.PreviewColorSpace, PreviewColorSpace.sRGB)
     r = RAW2DNG()
     r.options(t, path="", compress=False)
@@ -409,80 +410,81 @@ def write_dng(img, nd_int, output_dir):
     return filename, r
 
 
-async def main(parsed):
-    if parsed.build_flat:
-        flats = list(Path(parsed.build_flat).glob("*.IA"))
-        process_list_of_flats_to_flat(flats)
-        return
-    if parsed.dump_meta:
-        for file in Path(parsed.dump_meta).glob("*.IA"):
-            print(f"Saving meta for {file.name}")
-            dump_meta(file, Path(parsed.output))
-        return
+# async def main(parsed):
+#     if parsed.build_flat:
+#         flats = list(Path(parsed.build_flat).glob("*.IA"))
+#         await process_list_of_flats_to_flat(flats)
+#         return
+#     if parsed.dump_meta:
+#         for file in Path(parsed.dump_meta).glob("*.IA"):
+#             print(f"Saving meta for {file.name}")
+#             await dump_meta(file, Path(parsed.output))
+#         return
+#
+#     output_path = Path(parsed.output)
+#     os.makedirs(str(output_path.absolute()), exist_ok=True)
+#     files = []
+#     for i in parsed.images:
+#         img_path = Path(i)
+#         if img_path.is_dir():
+#             files.extend(img_path.glob("*.IA"))
+#         elif img_path.suffix == ".IA":
+#             files.append(img_path)
+#     print(f"Processing {len(files)} images!")
+#     flat_disable = parsed.flat_disable
+#     threads = []
+#     for f in files:
+#         # TODO Convert for better async?
+#         t = partial(convert_ia_file_to_dng, f, flat_disable, output_path)
+#         threads.append(asyncio.to_thread(t))
+#     thread_count = multiprocessing.cpu_count()
+#     for t_group in range(0, len(threads), thread_count):
+#         await asyncio.gather(*threads[t_group: t_group + thread_count])
 
-    output_path = Path(parsed.output)
-    os.makedirs(str(output_path.absolute()), exist_ok=True)
-    files = []
-    for i in parsed.images:
-        img_path = Path(i)
-        if img_path.is_dir():
-            files.extend(img_path.glob("*.IA"))
-        elif img_path.suffix == ".IA":
-            files.append(img_path)
-    print(f"Processing {len(files)} images!")
-    flat_disable = parsed.flat_disable
-    threads = []
-    for f in files:
-        t = partial(convert_ia_file_to_dng, f, flat_disable, output_path)
-        threads.append(asyncio.to_thread(t))
-    thread_count = multiprocessing.cpu_count()
-    for t_group in range(0, len(threads), thread_count):
-        await asyncio.gather(*threads[t_group: t_group + thread_count])
 
-
-def convert_ia_file_to_dng(f, flat_disable, output_path):
-    ia_img = read_sinar(f)
-    f_name, _ = create_ia_dng(ia_img, output_path, flat_disable=flat_disable)
+async def convert_ia_file_to_dng(f, flat_disable, output_path):
+    ia_img = await read_sinar(f)
+    f_name, _ = await create_ia_dng(ia_img, output_path, flat_disable=flat_disable)
     print(f"Processed: {f.absolute()} to {f_name.absolute()}")
 
 
-def dump_meta(f, output_dir):
-    ia_img = read_sinar(f)
+async def dump_meta(f, output_dir):
+    ia_img = await read_sinar(f)
     with open(output_dir / ia_img.filename.with_suffix(".meta").name, "wb") as fp:
         print(output_dir / ia_img.filename.with_suffix(".meta").name)
         fp.write(ia_img.meta)
 
 
-def read_meta(f):
+async def read_meta(f):
     with open(f, "rb") as fp:
         meta = fp.read()
-        ia = process_meta(meta)
+        ia = await process_meta(meta)
     return ia
 
 
-if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("-o", "--output", default=".", help="Output directory.")
-    p.add_argument(
-        "-m", "--multi", default=False, action="store_true", help="Use multiprocessing"
-    )
-    p.add_argument(
-        "-f",
-        "--flat-disable",
-        default=False,
-        action="store_true",
-        help="Disable flat files",
-    )
-    p.add_argument(
-        "--build-flat",
-        default=False,
-        help="Use this directory of files to build a flat file.",
-    )
-    p.add_argument(
-        "images", nargs="*", help="List of images or directory of images to process."
-    )
-    p.add_argument(
-        "--dump-meta", default=False, help="Dump meta data of this directory"
-    )
-    args = p.parse_args()
-    asyncio.run(main(args))
+# if __name__ == "__main__":
+#     p = argparse.ArgumentParser()
+#     p.add_argument("-o", "--output", default=".", help="Output directory.")
+#     p.add_argument(
+#         "-m", "--multi", default=False, action="store_true", help="Use multiprocessing"
+#     )
+#     p.add_argument(
+#         "-f",
+#         "--flat-disable",
+#         default=False,
+#         action="store_true",
+#         help="Disable flat files",
+#     )
+#     p.add_argument(
+#         "--build-flat",
+#         default=False,
+#         help="Use this directory of files to build a flat file.",
+#     )
+#     p.add_argument(
+#         "images", nargs="*", help="List of images or directory of images to process."
+#     )
+#     p.add_argument(
+#         "--dump-meta", default=False, help="Dump metadata of this directory"
+#     )
+#     args = p.parse_args()
+#     asyncio.run(main(args))

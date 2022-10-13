@@ -1,0 +1,69 @@
+[tool.briefcase]
+project_name = "IAtoDNG"
+bundle = "io.maxg"
+version = "0.0.1"
+url = "https://maxg.io/iatodng"
+license = "Proprietary"
+author = 'Maximilian Golub'
+author_email = "m@maxg.io"
+
+[tool.briefcase.app.iatodng]
+formal_name = "IAtoDNG"
+description = "Converts Sinar .IA raw files to DNG raws."
+icon = "src/iatodng/resources/iatodng"
+sources = ['src/iatodng']
+requires = [
+    "scipy",
+    "numpy",
+    "pillow",
+    "scikit-image",
+    "PiDNG",
+]
+
+
+[tool.briefcase.app.iatodng.macOS]
+requires = [
+    'toga-cocoa>=0.3.0.dev34',
+    'std-nslog~=1.0.0'
+]
+
+[tool.briefcase.app.iatodng.linux]
+requires = [
+    'toga-gtk>=0.3.0.dev34',
+]
+
+[tool.briefcase.app.iatodng.linux.appimage]
+system_requires = [
+    'gir1.2-webkit-3.0',
+    'libcairo2-dev',
+    'libgirepository1.0-dev',
+    'libgtk-3-dev',
+    'libpango1.0-dev',
+    'librsvg2-dev',
+    'libwebkitgtk-3.0-0',
+]
+linuxdeploy_plugins = [
+    'DEPLOY_GTK_VERSION=3 gtk',
+]
+
+[tool.briefcase.app.iatodng.linux.flatpak]
+flatpak_runtime = 'org.gnome.Platform'
+flatpak_runtime_version = '42'
+flatpak_sdk = 'org.gnome.Sdk'
+
+[tool.briefcase.app.iatodng.windows]
+requires = [
+    'toga-winforms>=0.3.0.dev34',
+]
+
+# Mobile deployments
+[tool.briefcase.app.iatodng.iOS]
+requires = [
+    'toga-iOS>=0.3.0.dev34',
+    'std-nslog~=1.0.0'
+]
+
+[tool.briefcase.app.iatodng.android]
+requires = [
+    'toga-android>=0.3.0.dev34'
+]
