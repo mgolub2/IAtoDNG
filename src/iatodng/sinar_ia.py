@@ -38,11 +38,11 @@ MODEL_TO_SIZE = {
     "e22": (5344, 4008),
     "e75": (6668, 4992),
 }
-pyEMDNG_HOME = Path(Path.home() / ".local/pyEMDNG")
-FLAT_DIR = pyEMDNG_HOME / "flats"
-pyEMDNG_HOME.mkdir(exist_ok=True)
-FLAT_DIR.mkdir(exist_ok=True)
-FILENAME = "pyEMDNG_flat_iso{iso}_{lens}mm.npy"
+# pyEMDNG_HOME = Path(Path.home() / ".local/pyEMDNG")
+# FLAT_DIR = pyEMDNG_HOME / "flats"
+# pyEMDNG_HOME.mkdir(exist_ok=True)
+# FLAT_DIR.mkdir(exist_ok=True)
+# FILENAME = "pyEMDNG_flat_iso{iso}_{lens}mm.npy"
 MULT = 1000000000
 
 # TODO this is taken from the CCM created by the original emotionDNG for
