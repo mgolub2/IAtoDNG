@@ -42,7 +42,6 @@ class IaApp(toga.App):
         self.file_dict = dict()
         self.output_path = None
 
-        self.spinner = toga.ActivityIndicator()
 
         self.file_table = toga.Table(
             headings=["IA File", "Processed"],
