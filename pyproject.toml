@@ -10,7 +10,7 @@ author_email = "m@maxg.io"
 [tool.briefcase.app.iatodng]
 formal_name = "IAtoDNG"
 description = "Converts Sinar .IA raw files to DNG raws."
-icon = "src/iatodng/resources/iatodng"
+icon = "src/iatodng/resources/logo"
 sources = ['src/iatodng']
 requires = [
     "scipy",
