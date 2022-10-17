@@ -1,9 +1,9 @@
 [tool.briefcase]
 project_name = "IAtoDNG"
 bundle = "io.maxg"
-version = "0.0.1"
-url = "https://maxg.io/iatodng"
-license = "Proprietary"
+version = "0.2.1"
+url = "https://blog.maxg.io/iatodng"
+license = "CC BY-NC-ND 4.0"
 author = 'Maximilian Golub'
 author_email = "m@maxg.io"
 
