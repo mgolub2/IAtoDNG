@@ -24,6 +24,14 @@ python -m pip install briefcase
 briefcase dev  # will install dependencies for your platform and start the GUI app
 ```
 
+### Building a package for your platform
+This will build a .app on MacOS and a .exe on Windows
+```bash
+briefcase create
+briefcase build 
+briefcase run  # if you want to run your app right away
+```
+
 ## GUI Usage
 1. select the input directory container .IA images and .BR (and .WR possibly) files.
 2. select an output directory for the DNGs to be saved to.
@@ -76,6 +84,7 @@ will use the correct lensless flat file for that iso.
 ## TODO
 * Read and apply the CCD calibration files included with Sinar backs.
   * This is possibly already captured by emotion 75 .WR files.
+* Package this as a DMG and installer for windows to make things simpler for non CLI folks.
 * Understand and apply the LINEAR and BLEMISH components of .WR files.
 * Tweak meta processing for other Camera bodies, such as the Mamiya AFD.
 * This could all be wrong :) 
