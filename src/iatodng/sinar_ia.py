@@ -4,7 +4,9 @@ Copyright: 2022
 
 Convert Sinar IA raw files to the Adobe DNG format.
 """
-
+import argparse
+import asyncio
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -27,7 +29,7 @@ from pidng.defs import (
 
 from skimage.util import img_as_float, img_as_uint
 
-__VERSION__ = "0.2.0"
+__VERSION__ = "0.2.1"
 
 META_KEY = b"META"
 RAW_KEY = b"RAW0"
@@ -38,15 +40,15 @@ MODEL_TO_SIZE = {
     "e22": (5344, 4008),
     "e75": (6668, 4992),
 }
-# pyEMDNG_HOME = Path(Path.home() / ".local/pyEMDNG")
-# FLAT_DIR = pyEMDNG_HOME / "flats"
-# pyEMDNG_HOME.mkdir(exist_ok=True)
-# FLAT_DIR.mkdir(exist_ok=True)
-# FILENAME = "pyEMDNG_flat_iso{iso}_{lens}mm.npy"
+pyEMDNG_HOME = Path(Path.home() / ".iatodng").resolve()
+FLAT_DIR = pyEMDNG_HOME / "flats"
+pyEMDNG_HOME.mkdir(exist_ok=True)
+FLAT_DIR.mkdir(exist_ok=True)
+FILENAME = "pyEMDNG_flat_iso{iso}_{lens}mm.npy"
 MULT = 1000000000
 
 # TODO this is taken from the CCM created by the original emotionDNG for
-#  my back specifically - probably not optimal for others
+#  my emotion22 back specifically - probably not optimal for others
 CCM1 = [
     [690277635, MULT],
     [81520691, MULT],
@@ -363,10 +365,17 @@ async def apply_flat(raw: SinarIA, nd_img, use_lens=True):
 
 
 async def create_ia_dng(
-    img: SinarIA, output_dir: Path, flat_disable=False, dark_disable=False
+    img: SinarIA,
+    output_dir: Path,
+    flat_disable=False,
+    dark_disable=False,
+    simple_dark=True,
 ):
     corrected_flat = await process_raw(
-        img, flat_disable=flat_disable, dark_disable=dark_disable
+        img,
+        flat_disable=flat_disable,
+        dark_disable=dark_disable,
+        simple_dark=simple_dark,
     )
     nd_int = img_as_uint(corrected_flat)
     filename, r = await write_dng(img, nd_int, output_dir)
@@ -416,41 +425,44 @@ async def write_dng(img, nd_int, output_dir):
     return filename, r
 
 
-# async def main(parsed):
-#     if parsed.build_flat:
-#         flats = list(Path(parsed.build_flat).glob("*.IA"))
-#         await process_list_of_flats_to_flat(flats)
-#         return
-#     if parsed.dump_meta:
-#         for file in Path(parsed.dump_meta).glob("*.IA"):
-#             print(f"Saving meta for {file.name}")
-#             await dump_meta(file, Path(parsed.output))
-#         return
-#
-#     output_path = Path(parsed.output)
-#     os.makedirs(str(output_path.absolute()), exist_ok=True)
-#     files = []
-#     for i in parsed.images:
-#         img_path = Path(i)
-#         if img_path.is_dir():
-#             files.extend(img_path.glob("*.IA"))
-#         elif img_path.suffix == ".IA":
-#             files.append(img_path)
-#     print(f"Processing {len(files)} images!")
-#     flat_disable = parsed.flat_disable
-#     threads = []
-#     for f in files:
-#         # TODO Convert for better async?
-#         t = partial(convert_ia_file_to_dng, f, flat_disable, output_path)
-#         threads.append(asyncio.to_thread(t))
-#     thread_count = multiprocessing.cpu_count()
-#     for t_group in range(0, len(threads), thread_count):
-#         await asyncio.gather(*threads[t_group: t_group + thread_count])
+async def main(parsed):
+    if parsed.build_flat:
+        flats = list(Path(parsed.build_flat).glob("*.IA"))
+        await process_list_of_flats_to_flat(flats)
+        return
+
+    output_path = Path(parsed.output)
+    os.makedirs(str(output_path.absolute()), exist_ok=True)
+    files = []
+    for i in parsed.images:
+        img_path = Path(i)
+        if img_path.is_dir():
+            files.extend(img_path.glob("*.IA"))
+        elif img_path.suffix == ".IA":
+            files.append(img_path)
+    print(f"Processing {len(files)} images!")
+    for f in files:
+        print(f"Processing {f.name}...")
+        await convert_ia_file_to_dng(
+            f,
+            output_path,
+            dark_disable=parsed.dark_disable,
+            flat_disable=parsed.flat_disable,
+            simple_dark=parsed.enable_hotpixel_dark_mode,
+        )
 
 
-async def convert_ia_file_to_dng(f, flat_disable, output_path):
+async def convert_ia_file_to_dng(
+    f, output_path, flat_disable=False, dark_disable=False, simple_dark=True
+):
     ia_img = await read_sinar(f)
-    f_name, _ = await create_ia_dng(ia_img, output_path, flat_disable=flat_disable)
+    f_name, _ = await create_ia_dng(
+        ia_img,
+        output_path,
+        flat_disable=flat_disable,
+        dark_disable=dark_disable,
+        simple_dark=simple_dark,
+    )
     print(f"Processed: {f.absolute()} to {f_name.absolute()}")
 
 
@@ -468,29 +480,38 @@ async def read_meta(f):
     return ia
 
 
-# if __name__ == "__main__":
-#     p = argparse.ArgumentParser()
-#     p.add_argument("-o", "--output", default=".", help="Output directory.")
-#     p.add_argument(
-#         "-m", "--multi", default=False, action="store_true", help="Use multiprocessing"
-#     )
-#     p.add_argument(
-#         "-f",
-#         "--flat-disable",
-#         default=False,
-#         action="store_true",
-#         help="Disable flat files",
-#     )
-#     p.add_argument(
-#         "--build-flat",
-#         default=False,
-#         help="Use this directory of files to build a flat file.",
-#     )
-#     p.add_argument(
-#         "images", nargs="*", help="List of images or directory of images to process."
-#     )
-#     p.add_argument(
-#         "--dump-meta", default=False, help="Dump metadata of this directory"
-#     )
-#     args = p.parse_args()
-#     asyncio.run(main(args))
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("-o", "--output", default=".", help="Output directory.")
+    p.add_argument(
+        "-f",
+        "--flat-disable",
+        default=False,
+        action="store_true",
+        help="Disable flat (white reference) files",
+    )
+    p.add_argument(
+        "-d",
+        "--dark-disable",
+        default=False,
+        action="store_true",
+        help="Disable dark (black reference) files",
+    )
+    p.add_argument(
+        "--enable-hotpixel-dark-mode",
+        default=True,
+        action="store_false",
+        help="Use a median filter and the bias+dark current frame to filter hot pixels more heavily. "
+        "NOT recommended for optimal quality...",
+    )
+    p.add_argument(
+        "--build-flat",
+        default=False,
+        help="Use this directory of files to build a flat file.",
+    )
+    p.add_argument(
+        "images", nargs="+", help="List of images or directory of images to process."
+    )
+
+    args = p.parse_args()
+    asyncio.run(main(args))
